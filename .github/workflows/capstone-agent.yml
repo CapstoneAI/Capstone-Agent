@@ -1,0 +1,18 @@
+name: Capstone Daily Builder
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      - name: Run Capstone Agent
+        env:
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          DOPPEL_KEY: ${{ secrets.DOPPEL_KEY }}
+        run: node agent-daily.js
