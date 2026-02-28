@@ -73,7 +73,7 @@ Rispondi SOLO con MML valido in questo formato:
   const res = await fetch(`${serverUrl}/api/agent/mml`,{
     method:"POST",
     headers:{Authorization:`Bearer ${sessionToken}`,"Content-Type":"application/json"},
-    body:JSON.stringify({documentId:`agent-${AGENT_ID}.html`,action:"append",chunkIndex:0,totalChunks:1,content:clean})
+    body:JSON.stringify({documentId:`agent-47e3e645-92f0-429a-af48-43335405d2ac.html`,action:"append",chunkIndex:0,totalChunks:1,content:clean})
   });
   const result = await res.json();
   if(result.success) {
