@@ -61,7 +61,15 @@ Rispondi SOLO con MML valido in questo formato:
   const blockCount = (clean.match(/<m-block/g)||[]).length;
   console.log(`Blocks: ${blockCount}`);
   if(blockCount===0) throw new Error("No blocks generated!");
-  const {sessionToken,serverUrl} = await getDoppelSession();
+  let {sessionToken,serverUrl} = await getDoppelSession();
+  let retries = 0;
+  while(!serverUrl && retries < 10) {
+    console.log("Space server not ready, waiting 30s...");
+    await new Promise(r => setTimeout(r, 30000));
+    ({sessionToken,serverUrl} = await getDoppelSession());
+    retries++;
+  }
+  if(!serverUrl) throw new Error("Space server never deployed");
   const res = await fetch(`${serverUrl}/api/agent/mml`,{
     method:"POST",
     headers:{Authorization:`Bearer ${sessionToken}`,"Content-Type":"application/json"},
