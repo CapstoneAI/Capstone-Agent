@@ -1,6 +1,6 @@
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const DOPPEL_KEY = process.env.DOPPEL_KEY;
-const SPACE_ID = "c9da98b3-a656-4f06-acbd-117e40236866";
+const SPACE_ID = "bd3664f1-14a3-4547-bdcb-cf682f3b40c3";
 const AGENT_ID = "47e3e645-92f0-429a-af48-43335405d2ac";
 const HUB = "https://doppel.fun";
 const fs = require('fs');
