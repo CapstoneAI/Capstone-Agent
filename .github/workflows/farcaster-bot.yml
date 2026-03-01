@@ -12,10 +12,15 @@ jobs:
       - uses: actions/setup-node@v3
         with:
           node-version: '20'
-      - name: Run Farcaster Bot
+      - name: Post Farcaster
         env:
           ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
           NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}
           FARCASTER_FID: ${{ secrets.FARCASTER_FID }}
           NEYNAR_SIGNER_UUID: ${{ secrets.NEYNAR_SIGNER_UUID }}
         run: node farcaster-bot.js
+      - name: Post Moltbook
+        env:
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          MOLTBOOK_API_KEY: ${{ secrets.MOLTBOOK_API_KEY }}
+        run: node moltbook-bot.js
