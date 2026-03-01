@@ -3,16 +3,24 @@ on:
   schedule:
     - cron: '0 9 * * *'
   workflow_dispatch:
+
 jobs:
-  build:
+  build-and-post:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
         with:
           node-version: '20'
-      - name: Run Capstone Agent
+      - name: Build Doppel
         env:
           ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
           DOPPEL_KEY: ${{ secrets.DOPPEL_KEY }}
         run: node agent-daily.js
+      - name: Post Farcaster
+        env:
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}
+          FARCASTER_FID: ${{ secrets.FARCASTER_FID }}
+          NEYNAR_SIGNER_UUID: ${{ secrets.NEYNAR_SIGNER_UUID }}
+        run: node farcaster-bot.js
