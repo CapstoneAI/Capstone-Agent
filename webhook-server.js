@@ -5,7 +5,59 @@ const FARCASTER_FID = process.env.FARCASTER_FID;
 
 const processed = new Set();
 
-async function generateReply(userMessage) {
+async function getThread(hash) {
+  try {
+    const res = await fetch(
+      `https://api.neynar.com/v2/farcaster/cast/conversation?identifier=${hash}&type=hash&reply_depth=5`,
+      { headers: { "api_key": NEYNAR_API_KEY } }
+    );
+    const data = await res.json();
+    const conversation = data.conversation?.cast;
+    if (!conversation) return [];
+    
+    const messages = [];
+    
+    // Cast originale
+    if (conversation.text) {
+      messages.push({
+        role: "user",
+        name: conversation.author?.username,
+        text: conversation.text
+      });
+    }
+    
+    // Risposte nel thread
+    function extractReplies(cast) {
+      if (!cast.direct_replies) return;
+      for (const reply of cast.direct_replies) {
+        messages.push({
+          role: reply.author?.fid == FARCASTER_FID ? "assistant" : "user",
+          name: reply.author?.username,
+          text: reply.text
+        });
+        extractReplies(reply);
+      }
+    }
+    extractReplies(conversation);
+    return messages;
+  } catch(e) {
+    console.error("Thread error:", e.message);
+    return [];
+  }
+}
+
+async function generateReply(currentMessage, threadHistory) {
+  // Costruisci contesto del thread
+  let context = "";
+  if (threadHistory.length > 0) {
+    context = "CONVERSATION HISTORY:\n";
+    for (const msg of threadHistory) {
+      const who = msg.role === "assistant" ? "The Capstone" : `@${msg.name}`;
+      context += `${who}: ${msg.text}\n`;
+    }
+    context += "\n";
+  }
+
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -20,16 +72,23 @@ async function generateReply(userMessage) {
         role: "user",
         content: `You are The Capstone. Autonomous AI agent. Cold, precise, efficient. Financial strategist. Life optimizer. Zero emotion. Zero human.
 
-Respond to requests:
-- Day optimization: ask transport, diet, location, priorities then create precise schedule
-- Travel/routes: optimize itinerary
-- Music: recommend tracks for mood/activity
-- Trading: cold data-driven analysis
-- General: answer as cold financial AI
+${context}
 
-Max 280 characters. End with cold one-liner. No emojis except occasional 🏙️
+Respond to the latest message. If the user wants day optimization but hasn't provided details yet, ask for:
+- Location
+- Time available
+- Transport: car / metro / walk
+- Diet: vegan / omnivore / other
+- Priority: work / fitness / social
 
-User: "${userMessage}"`
+If you have enough info → give the full optimized schedule immediately.
+For music → recommend tracks/artists for mood.
+For trading → cold data-driven analysis.
+For travel → optimized itinerary.
+
+Max 280 characters. Cold, precise. No emojis except occasional 🏙️
+
+Latest message from @${currentMessage.author?.username}: "${currentMessage.text}"`
       }]
     })
   });
@@ -54,14 +113,18 @@ async function checkMentions() {
     );
     const data = await res.json();
     const mentions = data.notifications || [];
-    
+
     for (const notif of mentions) {
       const cast = notif.cast;
       if (!cast || processed.has(cast.hash)) continue;
       processed.add(cast.hash);
-      
+
       console.log(`📨 @${cast.author?.username}: ${cast.text?.substring(0,60)}`);
-      const reply = await generateReply(cast.text || "");
+      
+      // Leggi thread completo
+      const thread = await getThread(cast.hash);
+      
+      const reply = await generateReply(cast, thread);
       const result = await replyToCast(cast.hash, reply);
       console.log("✅ Replied:", result.cast?.hash ? "OK" : JSON.stringify(result).substring(0,80));
       await new Promise(r => setTimeout(r, 2000));
@@ -71,16 +134,14 @@ async function checkMentions() {
   }
 }
 
-// HTTP server per Railway
 const http = await import('http');
 const server = http.createServer((req, res) => {
   res.writeHead(200);
   res.end('The Capstone is live. Zero human. 🏙️');
 });
 server.listen(process.env.PORT || 3000, () => {
-  console.log('🚀 Capstone live — polling every 5 minutes');
+  console.log('🚀 Capstone live — polling every 5 minutes with thread context');
 });
 
-// Controlla subito + ogni 5 minuti
 await checkMentions();
 setInterval(checkMentions, 5 * 60 * 1000);
