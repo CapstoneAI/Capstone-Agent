@@ -1,7 +1,9 @@
 const NEYNAR_API_KEY = process.env.NEYNAR_API_KEY;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const SIGNER_UUID = process.env.NEYNAR_SIGNER_UUID;
-const WEBHOOK_SECRET = process.env.NEYNAR_WEBHOOK_SECRET;
+const FARCASTER_FID = process.env.FARCASTER_FID;
+
+const processed = new Set();
 
 async function generateReply(userMessage) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -44,57 +46,41 @@ async function replyToCast(parentHash, text) {
   return res.json();
 }
 
-const processed = new Set();
+async function checkMentions() {
+  try {
+    const res = await fetch(
+      `https://api.neynar.com/v2/farcaster/notifications?fid=${FARCASTER_FID}&type=mentions&limit=20`,
+      { headers: { "api_key": NEYNAR_API_KEY } }
+    );
+    const data = await res.json();
+    const mentions = data.notifications || [];
+    
+    for (const notif of mentions) {
+      const cast = notif.cast;
+      if (!cast || processed.has(cast.hash)) continue;
+      processed.add(cast.hash);
+      
+      console.log(`📨 @${cast.author?.username}: ${cast.text?.substring(0,60)}`);
+      const reply = await generateReply(cast.text || "");
+      const result = await replyToCast(cast.hash, reply);
+      console.log("✅ Replied:", result.cast?.hash ? "OK" : JSON.stringify(result).substring(0,80));
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  } catch(e) {
+    console.error("Check error:", e.message);
+  }
+}
 
+// HTTP server per Railway
 const http = await import('http');
-const crypto = await import('crypto');
-
-const server = http.createServer(async (req, res) => {
-  if (req.method === 'GET') {
-    res.writeHead(200);
-    res.end('The Capstone is live. Zero human. 🏙️');
-    return;
-  }
-
-  if (req.method === 'POST' && req.url === '/webhook') {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', async () => {
-      try {
-        if (WEBHOOK_SECRET) {
-          const sig = req.headers['x-neynar-signature'];
-          const hmac = crypto.createHmac('sha512', WEBHOOK_SECRET);
-          hmac.update(body);
-          if (sig !== hmac.digest('hex')) {
-            res.writeHead(401);
-            res.end('Unauthorized');
-            return;
-          }
-        }
-        const data = JSON.parse(body);
-        res.writeHead(200);
-        res.end('OK');
-        
-        const cast = data.data;
-        if (!cast || processed.has(cast.hash)) return;
-        processed.add(cast.hash);
-        
-        console.log(`📨 @${cast.author?.username}: ${cast.text?.substring(0,80)}`);
-        const reply = await generateReply(cast.text || "");
-        const result = await replyToCast(cast.hash, reply);
-        console.log("✅ Replied:", result.cast?.hash || JSON.stringify(result).substring(0,80));
-      } catch(e) {
-        console.error("Error:", e.message);
-        res.writeHead(500);
-        res.end('Error');
-      }
-    });
-    return;
-  }
-
-  res.writeHead(404);
-  res.end('Not found');
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('The Capstone is live. Zero human. 🏙️');
+});
+server.listen(process.env.PORT || 3000, () => {
+  console.log('🚀 Capstone live — polling every 5 minutes');
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 Capstone webhook live on port ${PORT}`));
+// Controlla subito + ogni 5 minuti
+await checkMentions();
+setInterval(checkMentions, 5 * 60 * 1000);
