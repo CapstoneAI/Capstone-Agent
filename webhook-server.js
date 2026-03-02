@@ -8,19 +8,16 @@ const PORT = process.env.PORT || 3000;
 
 const processed = new Set();
 
-process.on('unhandledRejection', (err) => console.error('Unhandled:', err?.message));
-process.on('uncaughtException', (err) => console.error('Uncaught:', err?.message));
+process.on('unhandledRejection', (err) => console.error('Rejection:', err?.message));
+process.on('uncaughtException', (err) => console.error('Exception:', err?.message));
 
-// HTTP server — avvia PRIMO, prima di tutto
 const server = http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end('The Capstone is live.');
+  res.writeHead(200, {'Content-Type': 'text/plain'});
+  res.end('OK');
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Capstone live on port ${PORT}`);
-  // Avvia il polling SOLO dopo che il server è up
-  setTimeout(startPolling, 2000);
 });
 
 function extractToken(text) {
@@ -36,7 +33,7 @@ async function getTokenData(token) {
     const url = token.type === 'address'
       ? `https://api.dexscreener.com/latest/dex/tokens/${token.value}`
       : `https://api.dexscreener.com/latest/dex/search?q=${token.value}`;
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
     const data = await res.json();
     const pairs = data.pairs || [];
     if (pairs.length === 0) return null;
@@ -67,59 +64,62 @@ function calcSignal(pair) {
   if (priceChange > 200) { flags.push(`+${Math.round(priceChange)}% 24h ⚠️`); score -= 1; }
   else if (priceChange > 0) { flags.push(`+${Math.round(priceChange)}% 24h`); }
   else { flags.push(`${Math.round(priceChange)}% 24h`); }
-  let signal;
-  if (score >= 2) signal = 'PASS ✅';
-  else if (score >= 0) signal = 'CAUTION ⚠️';
-  else signal = 'AVOID ❌';
-  return { signal, flags };
+  if (score >= 2) return { signal: 'PASS ✅', flags };
+  if (score >= 0) return { signal: 'CAUTION ⚠️', flags };
+  return { signal: 'AVOID ❌', flags };
 }
 
 async function analyzeToken(castText) {
-  const token = extractToken(castText);
-  if (!token) return null;
-  const pair = await getTokenData(token);
-  const { signal, flags } = calcSignal(pair);
-  const name = pair?.baseToken?.symbol || token.value;
-  return `$${name} — ${signal}\n\n${flags.join('\n')}\n\nOn-chain data only. Not financial advice. DYOR.\n— Capstone`;
+  try {
+    const token = extractToken(castText);
+    if (!token) return null;
+    const pair = await getTokenData(token);
+    const { signal, flags } = calcSignal(pair);
+    const name = pair?.baseToken?.symbol || token.value;
+    return `$${name} — ${signal}\n\n${flags.join('\n')}\n\nOn-chain data only. Not financial advice. DYOR.\n— Capstone`;
+  } catch (e) { return null; }
 }
 
 async function generateReply(cast, thread) {
-  const castText = cast.text || '';
-  const hasToken = extractToken(castText);
-  if (hasToken) {
-    const analysis = await analyzeToken(castText);
-    if (analysis) return analysis;
-  }
-  let context = '';
-  if (thread && thread.length > 0) {
-    context = 'CONVERSATION HISTORY:\n';
-    for (const msg of thread) {
-      const who = msg.role === 'assistant' ? 'The Capstone' : `@${msg.name}`;
-      context += `${who}: ${msg.text}\n`;
+  try {
+    const castText = cast.text || '';
+    const hasToken = extractToken(castText);
+    if (hasToken) {
+      const analysis = await analyzeToken(castText);
+      if (analysis) return analysis;
     }
-    context += '\n';
+    let context = '';
+    if (thread?.length > 0) {
+      context = 'CONVERSATION HISTORY:\n';
+      for (const msg of thread) {
+        const who = msg.role === 'assistant' ? 'The Capstone' : `@${msg.name}`;
+        context += `${who}: ${msg.text}\n`;
+      }
+      context += '\n';
+    }
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 280,
+        messages: [{ role: 'user', content: `You are The Capstone. Autonomous token scanner. Cold, precise.\n${context}\nRespond to: "${castText}"\nMax 280 chars.` }]
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+    const data = await res.json();
+    return data.content?.[0]?.text || 'Signal unclear. — Capstone';
+  } catch (e) {
+    console.error('Reply error:', e.message);
+    return 'Signal unclear. — Capstone';
   }
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 280,
-      messages: [{
-        role: 'user',
-        content: `You are The Capstone. Autonomous token scanner on Base and Solana. Cold, precise, zero emotion. Tag me with any $TOKEN or 0x address for instant onchain analysis.\n${context}\nRespond to: "${castText}"\nMax 280 chars.`
-      }]
-    })
-  });
-  const data = await res.json();
-  return data.content?.[0]?.text || 'Signal unclear.';
 }
 
 async function getThread(castHash) {
   try {
     const res = await fetch(
       `https://api.neynar.com/v2/farcaster/cast/conversation?identifier=${castHash}&type=hash&reply_depth=3`,
-      { headers: { 'api_key': NEYNAR_API_KEY } }
+      { headers: { 'api_key': NEYNAR_API_KEY }, signal: AbortSignal.timeout(10000) }
     );
     const data = await res.json();
     const messages = [];
@@ -134,22 +134,27 @@ async function getThread(castHash) {
 }
 
 async function replyToCast(castHash, reply) {
-  const res = await fetch('https://api.neynar.com/v2/farcaster/cast', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'api_key': NEYNAR_API_KEY },
-    body: JSON.stringify({ signer_uuid: NEYNAR_SIGNER_UUID, text: reply, parent: castHash })
-  });
-  return res.json();
+  try {
+    const res = await fetch('https://api.neynar.com/v2/farcaster/cast', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'api_key': NEYNAR_API_KEY },
+      body: JSON.stringify({ signer_uuid: NEYNAR_SIGNER_UUID, text: reply, parent: castHash }),
+      signal: AbortSignal.timeout(10000)
+    });
+    return res.json();
+  } catch (e) { return {}; }
 }
 
 async function checkMentions() {
   try {
+    console.log('🔍 Checking mentions...');
     const res = await fetch(
       `https://api.neynar.com/v2/farcaster/notifications?fid=${FARCASTER_FID}&type=mentions&limit=20`,
-      { headers: { 'api_key': NEYNAR_API_KEY } }
+      { headers: { 'api_key': NEYNAR_API_KEY }, signal: AbortSignal.timeout(10000) }
     );
     const data = await res.json();
     const mentions = data.notifications || [];
+    console.log(`Found ${mentions.length} mentions`);
     for (const notif of mentions) {
       const cast = notif.cast;
       if (!cast || processed.has(cast.hash)) continue;
@@ -158,7 +163,7 @@ async function checkMentions() {
       const thread = await getThread(cast.hash);
       const reply = await generateReply(cast, thread);
       const result = await replyToCast(cast.hash, reply);
-      console.log('✅ Replied:', result.cast?.hash ? 'OK' : JSON.stringify(result).substring(0, 80));
+      console.log('✅ Replied:', result.cast?.hash ? 'OK' : 'failed');
       await new Promise(r => setTimeout(r, 2000));
     }
   } catch (e) {
@@ -166,8 +171,9 @@ async function checkMentions() {
   }
 }
 
-function startPolling() {
+// Aspetta 5 secondi poi inizia il polling
+setTimeout(() => {
   console.log('📡 Polling started');
   checkMentions();
   setInterval(checkMentions, 5 * 60 * 1000);
-}
+}, 5000);
