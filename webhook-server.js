@@ -7,26 +7,23 @@ const processed = new Set();
 const scannedTokens = new Set();
 
 function extractToken(text) {
-  const ticker = text.match(/\$([A-Z]{2,10})/i);
   const address = text.match(/0x[a-fA-F0-9]{40}/);
+  const ticker = text.match(/\$([A-Za-z]{2,10})/);
   if (address) return { type: 'address', value: address[0] };
   if (ticker) return { type: 'ticker', value: ticker[1].toUpperCase() };
   return null;
 }
 
+// Analisi on-demand — qualsiasi chain
 async function getTokenData(token) {
   try {
-    let url;
-    if (token.type === 'address') {
-      url = `https://api.dexscreener.com/latest/dex/tokens/${token.value}`;
-    } else {
-      url = `https://api.dexscreener.com/latest/dex/search?q=${token.value}`;
-    }
+    const url = token.type === 'address'
+      ? `https://api.dexscreener.com/latest/dex/tokens/${token.value}`
+      : `https://api.dexscreener.com/latest/dex/search?q=${token.value}`;
     const res = await fetch(url);
     const data = await res.json();
     const pairs = data.pairs || [];
-    
-    
+    if (pairs.length === 0) return null;
     return pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
   } catch (e) { return null; }
 }
@@ -40,6 +37,9 @@ function calcSignal(pair) {
   const vol24 = pair.volume?.h24 || 0;
   const priceChange = pair.priceChange?.h24 || 0;
   const age = pair.pairCreatedAt ? Math.floor((Date.now() - pair.pairCreatedAt) / 3600000) : null;
+  const chain = pair.chainId || 'unknown';
+
+  flags.push(`Chain: ${chain}`);
 
   if (liq < 10000) { flags.push(`Liq: $${Math.round(liq).toLocaleString()} ⚠️`); score -= 2; }
   else if (liq < 50000) { flags.push(`Liq: $${Math.round(liq).toLocaleString()} ⚠️`); score -= 1; }
@@ -54,7 +54,7 @@ function calcSignal(pair) {
     else { flags.push(`Age: ${Math.floor(age/24)}d ✅`); score += 1; }
   }
 
-  if (priceChange > 200) { flags.push(`+${priceChange}% 24h ⚠️`); score -= 1; }
+  if (priceChange > 200) { flags.push(`+${Math.round(priceChange)}% 24h ⚠️`); score -= 1; }
   else if (priceChange > 0) { flags.push(`+${Math.round(priceChange)}% 24h`); }
   else { flags.push(`${Math.round(priceChange)}% 24h`); }
 
@@ -101,11 +101,11 @@ async function generateReply(cast, thread) {
       max_tokens: 280,
       messages: [{
         role: 'user',
-        content: `You are The Capstone. Autonomous token scanner on Base. Cold, precise, zero emotion.
+        content: `You are The Capstone. Autonomous token scanner. Base and Solana. Cold, precise, zero emotion.
 Tag me with any $TOKEN or 0x address for instant onchain analysis.
 ${context}
 Respond to: "${castText}"
-Max 280 chars. Cold, precise.`
+Max 280 chars. Cold, precise. No emojis except occasional 🏙️`
       }]
     })
   });
@@ -140,44 +140,45 @@ async function replyToCast(castHash, reply) {
   return res.json();
 }
 
+// Scan autonomo — nuovi token su Base (Clanker) via DexScreener token profiles
 async function autonomousScan() {
   try {
     console.log('🔍 Autonomous scan starting...');
-    
-    // Usa API Clanker per token recenti
-    const res = await fetch('https://api.clanker.world/clankers?sort=desc&page=1', {
-      headers: { 'Accept': 'application/json' }
-    });
+
+    const res = await fetch('https://api.dexscreener.com/token-profiles/latest/v1');
     const data = await res.json();
-    const tokens = data.data || data || [];
-    
-    console.log(`Found ${tokens.length} Clanker tokens`);
-    
-    // Filtra token non ancora scansionati
-    const newTokens = tokens.filter(t => !scannedTokens.has(t.contract_address));
-    
-    if (newTokens.length === 0) { console.log('No new tokens to scan'); return; }
-    
-    // Prendi il primo token non ancora scansionato
-    const token = newTokens[0];
-    scannedTokens.add(token.contract_address);
-    
-    const name = token.symbol || token.name || 'UNKNOWN';
-    console.log(`Scanning $${name} — ${token.contract_address}`);
-    
-    // Prendi dati DexScreener
-    const pair = await getTokenData({ type: 'address', value: token.contract_address });
+
+    // Filtra solo Base
+    const baseTokens = data.filter(t => t.chainId === 'base');
+    console.log(`Found ${baseTokens.length} Base tokens`);
+
+    if (baseTokens.length === 0) { console.log('No Base tokens found'); return; }
+
+    // Prendi il primo non ancora scansionato
+    const newToken = baseTokens.find(t => !scannedTokens.has(t.tokenAddress));
+    if (!newToken) { console.log('No new tokens to scan'); return; }
+
+    scannedTokens.add(newToken.tokenAddress);
+
+    // Prendi dati trading
+    const r2 = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${newToken.tokenAddress}`);
+    const d2 = await r2.json();
+    const pair = (d2.pairs || []).sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+
     const { signal, flags } = calcSignal(pair);
-    
+    const name = pair?.baseToken?.symbol || newToken.tokenAddress.substring(0, 8);
+
+    console.log(`Scanning $${name} — signal: ${signal}`);
+
     const post = `🔍 CAPSTONE SCAN — $${name}\n\n${flags.join('\n')}\n\nSignal: ${signal}\n\nNot financial advice. DYOR. — Capstone`;
-    
+
     const res2 = await fetch('https://api.neynar.com/v2/farcaster/cast', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'api_key': NEYNAR_API_KEY },
       body: JSON.stringify({ signer_uuid: NEYNAR_SIGNER_UUID, text: post.substring(0, 320) })
     });
     const result = await res2.json();
-    console.log('📡 Scan posted:', result.cast?.hash ? '✅' : '❌ ' + JSON.stringify(result).substring(0,100));
+    console.log('📡 Scan posted:', result.cast?.hash ? '✅ ' + result.cast.hash : '❌ ' + JSON.stringify(result).substring(0, 100));
   } catch (e) {
     console.error('Scan error:', e.message);
   }
