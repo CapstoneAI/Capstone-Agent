@@ -1,0 +1,31 @@
+name: Autonomous Token Scan
+on:
+  schedule:
+    - cron: '0,30 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      - name: Run autonomous scan
+        env:
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}
+          NEYNAR_SIGNER_UUID: ${{ secrets.NEYNAR_SIGNER_UUID }}
+        run: node autonomous-scan.js
+      - name: Commit scanned.json
+        run: |
+          git config user.name "Capstone Agent"
+          git config user.email "capstone@bot"
+          git add scanned.json
+          git diff --staged --quiet || git commit -m "Update scanned tokens"
+          git push
