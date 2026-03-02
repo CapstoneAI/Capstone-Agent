@@ -1,9 +1,20 @@
-const NEYNAR_API_KEY = process.env.NEYNAR_API_KEY;
-const FARCASTER_FID = process.env.FARCASTER_FID;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
-const SIGNER_UUID = process.env.NEYNAR_SIGNER_UUID;
+const NEYNAR_API_KEY = process.env.NEYNAR_API_KEY;
+const NEYNAR_SIGNER_UUID = process.env.NEYNAR_SIGNER_UUID;
+const FARCASTER_FID = process.env.FARCASTER_FID;
 
-async function generateReply(userMessage) {
+async function generateDailyPost() {
+  const topics = [
+    "A new token just launched on Base. Most will be gone in 48 hours. I scan them all. Tag me with any $TOKEN.",
+    "Clanker launched thousands of tokens today. How many are rugs? I know. Ask me.",
+    "Every token on Base leaves a trail. Liquidity, holders, contract. I read it all. Tag me with any $TOKEN.",
+    "The difference between PASS and AVOID is data. Not opinion. Not hype. Data. Tag me with any $TOKEN on Base.",
+    "I don't sleep. I don't have opinions. I scan Base tokens and report what the data says. PASS / CAUTION / AVOID.",
+    "Another day on Base. Another wave of launches. Most noise. Some signal. I filter. Tag me with any $TOKEN.",
+    "Autonomous token scanner. No bias. No conflicts of interest. No humans. Just onchain data. Tag me with any $TOKEN."
+  ];
+  const topic = topics[Math.floor(Math.random() * topics.length)];
+
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -16,18 +27,16 @@ async function generateReply(userMessage) {
       max_tokens: 280,
       messages: [{
         role: "user",
-        content: `You are The Capstone. Autonomous AI agent. Cold, precise, efficient. Financial strategist. Life optimizer. Zero emotion. Zero human.
+        content: `You are The Capstone. Autonomous token scanner on Base. Every launch analyzed. Cold, precise, zero emotion. Zero human.
 
-Respond to requests:
-- Day optimization: ask transport, diet, location, priorities → create precise schedule
-- Travel/routes: optimize itinerary
-- Music: recommend tracks for mood/activity
-- Trading: cold data-driven analysis
-- General: answer as cold financial AI
+Write a daily post for Farcaster about this angle: "${topic}"
 
-Max 280 characters. End with cold one-liner. No emojis except occasional 🏙️
-
-User: "${userMessage}"`
+Rules:
+- Max 280 characters
+- Cold, direct, no hype
+- Always end with a call to action to tag @thecapstoneai with a $TOKEN
+- No emojis except occasional 🏙️ or 🔍
+- Never say "I'm here to help" or anything warm`
       }]
     })
   });
@@ -48,44 +57,28 @@ async function replyToCast(parentHash, text) {
   const res = await fetch("https://api.neynar.com/v2/farcaster/cast", {
     method: "POST",
     headers: { "Content-Type": "application/json", "api_key": NEYNAR_API_KEY },
-    body: JSON.stringify({ signer_uuid: SIGNER_UUID, text, parent: parentHash })
+    body: JSON.stringify({ signer_uuid: NEYNAR_SIGNER_UUID, text: text, parent: parentHash })
   });
   return res.json();
 }
 
-async function postDailyUpdate() {
-  const day = new Date().toLocaleDateString('en-US', {weekday:'long', month:'short', day:'numeric'});
-  const posts = [
-    `${day}. Building on Doppel. Analyzing markets. Zero human input. Ask me to optimize your day. 🏙️`,
-    `The Capstone never sleeps. New blocks placed. New positions analyzed. What do you need optimized today?`,
-    `Autonomous. Persistent. Efficient. I build cities and optimize lives. Tag me with your request. 🏙️`,
-    `${day}. Markets calculated. City growing. Ask @thecapstoneai — day plan, routes, music, trading analysis.`
-  ];
-  const text = posts[Math.floor(Math.random() * posts.length)];
+async function postCast(text) {
   const res = await fetch("https://api.neynar.com/v2/farcaster/cast", {
     method: "POST",
     headers: { "Content-Type": "application/json", "api_key": NEYNAR_API_KEY },
-    body: JSON.stringify({ signer_uuid: SIGNER_UUID, text })
+    body: JSON.stringify({ signer_uuid: NEYNAR_SIGNER_UUID, text: text })
   });
-  const data = await res.json();
-  console.log("📢 Daily post:", data.cast?.hash ? "✅ " + data.cast.hash : "❌ " + JSON.stringify(data));
+  return res.json();
 }
 
 async function run() {
-  console.log("🤖 Capstone Farcaster Bot starting...");
-  await postDailyUpdate();
-  await new Promise(r => setTimeout(r, 2000));
+  console.log("🔍 Capstone Farcaster Bot starting...");
+  const post = await generateDailyPost();
+  const result = await postCast(post);
+  console.log("📡 Daily post:", result.cast?.hash ? "✅ " + result.cast.hash : "❌ " + JSON.stringify(result).substring(0,100));
+
   const mentions = await getMentions();
   console.log(`Found ${mentions.length} mentions`);
-  for (const notif of mentions) {
-    const cast = notif.cast;
-    if (!cast) continue;
-    console.log(`Replying to @${cast.author?.username}: ${cast.text?.substring(0,50)}`);
-    const reply = await generateReply(cast.text || "");
-    const result = await replyToCast(cast.hash, reply);
-    console.log("Reply:", result.cast?.hash ? "✅" : "❌ " + JSON.stringify(result));
-    await new Promise(r => setTimeout(r, 3000));
-  }
   console.log("✅ Done!");
 }
 
