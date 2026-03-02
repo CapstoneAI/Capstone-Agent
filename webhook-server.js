@@ -53,6 +53,8 @@ function calcSignal(pair) {
   flags.push(`Chain: ${chain}`);
   const price = pair.priceUsd ? `Price: $${parseFloat(pair.priceUsd).toFixed(6)}` : null;
   if (price) flags.push(price);
+  const price = pair.priceUsd ? `Price: $${parseFloat(pair.priceUsd).toFixed(6)}` : null;
+  if (price) flags.push(price);
   if (liq < 10000) { flags.push(`Liq: $${Math.round(liq).toLocaleString()} ⚠️`); score -= 2; }
   else if (liq < 50000) { flags.push(`Liq: $${Math.round(liq).toLocaleString()} ⚠️`); score -= 1; }
   else { flags.push(`Liq: $${Math.round(liq).toLocaleString()} ✅`); score += 1; }
