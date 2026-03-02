@@ -25,9 +25,9 @@ async function getTokenData(token) {
     const res = await fetch(url);
     const data = await res.json();
     const pairs = data.pairs || [];
-    const basePairs = pairs.filter(p => p.chainId === 'base');
-    if (basePairs.length === 0) return pairs[0] || null;
-    return basePairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+    
+    
+    return pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
   } catch (e) { return null; }
 }
 
