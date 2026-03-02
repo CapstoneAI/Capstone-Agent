@@ -141,48 +141,6 @@ async function replyToCast(castHash, reply) {
 }
 
 // Scan autonomo — nuovi token su Base (Clanker) via DexScreener token profiles
-async function autonomousScan() {
-  try {
-    console.log('🔍 Autonomous scan starting...');
-
-    const res = await fetch('https://api.dexscreener.com/token-profiles/latest/v1');
-    const data = await res.json();
-
-    // Filtra solo Base
-    const baseTokens = data.filter(t => t.chainId === 'base');
-    console.log(`Found ${baseTokens.length} Base tokens`);
-
-    if (baseTokens.length === 0) { console.log('No Base tokens found'); return; }
-
-    // Prendi il primo non ancora scansionato
-    const newToken = baseTokens.find(t => !scannedTokens.has(t.tokenAddress));
-    if (!newToken) { console.log('No new tokens to scan'); return; }
-
-    scannedTokens.add(newToken.tokenAddress);
-
-    // Prendi dati trading
-    const r2 = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${newToken.tokenAddress}`);
-    const d2 = await r2.json();
-    const pair = (d2.pairs || []).sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
-
-    const { signal, flags } = calcSignal(pair);
-    const name = pair?.baseToken?.symbol || newToken.tokenAddress.substring(0, 8);
-
-    console.log(`Scanning $${name} — signal: ${signal}`);
-
-    const post = `🔍 CAPSTONE SCAN — $${name}\n\n${flags.join('\n')}\n\nSignal: ${signal}\n\nNot financial advice. DYOR. — Capstone`;
-
-    const res2 = await fetch('https://api.neynar.com/v2/farcaster/cast', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'api_key': NEYNAR_API_KEY },
-      body: JSON.stringify({ signer_uuid: NEYNAR_SIGNER_UUID, text: post.substring(0, 320) })
-    });
-    const result = await res2.json();
-    console.log('📡 Scan posted:', result.cast?.hash ? '✅ ' + result.cast.hash : '❌ ' + JSON.stringify(result).substring(0, 100));
-  } catch (e) {
-    console.error('Scan error:', e.message);
-  }
-}
 
 async function checkMentions() {
   try {
@@ -219,6 +177,4 @@ server.listen(process.env.PORT || 3000, () => {
 });
 
 await checkMentions();
-await autonomousScan();
 setInterval(checkMentions, 5 * 60 * 1000);
-setInterval(autonomousScan, 30 * 60 * 1000);
