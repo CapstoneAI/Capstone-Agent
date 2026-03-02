@@ -3,8 +3,6 @@ on:
   schedule:
     - cron: '0,30 * * * *'
   workflow_dispatch:
-  push:
-    branches: [main]
 
 jobs:
   scan:
@@ -18,7 +16,6 @@ jobs:
           node-version: '20'
       - name: Run autonomous scan
         env:
-          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
           NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}
           NEYNAR_SIGNER_UUID: ${{ secrets.NEYNAR_SIGNER_UUID }}
         run: node autonomous-scan.js
@@ -27,5 +24,4 @@ jobs:
           git config user.name "Capstone Agent"
           git config user.email "capstone@bot"
           git add scanned.json
-          git diff --staged --quiet || git commit -m "Update scanned tokens"
-          git push
+          git diff --staged --quiet || git commit -m "Update scanned [skip ci]" && git push
