@@ -4,7 +4,6 @@ const NEYNAR_SIGNER_UUID = process.env.NEYNAR_SIGNER_UUID;
 const FARCASTER_FID = process.env.FARCASTER_FID;
 
 const processed = new Set();
-const scannedTokens = new Set();
 
 function extractToken(text) {
   const address = text.match(/0x[a-fA-F0-9]{40}/);
@@ -14,7 +13,6 @@ function extractToken(text) {
   return null;
 }
 
-// Analisi on-demand — qualsiasi chain
 async function getTokenData(token) {
   try {
     const url = token.type === 'address'
@@ -101,7 +99,7 @@ async function generateReply(cast, thread) {
       max_tokens: 280,
       messages: [{
         role: 'user',
-        content: `You are The Capstone. Autonomous token scanner. Base and Solana. Cold, precise, zero emotion.
+        content: `You are The Capstone. Autonomous token scanner on Base and Solana. Cold, precise, zero emotion.
 Tag me with any $TOKEN or 0x address for instant onchain analysis.
 ${context}
 Respond to: "${castText}"
@@ -139,8 +137,6 @@ async function replyToCast(castHash, reply) {
   });
   return res.json();
 }
-
-// Scan autonomo — nuovi token su Base (Clanker) via DexScreener token profiles
 
 async function checkMentions() {
   try {
