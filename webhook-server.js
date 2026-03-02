@@ -4,8 +4,8 @@ const NEYNAR_SIGNER_UUID = process.env.NEYNAR_SIGNER_UUID;
 const FARCASTER_FID = process.env.FARCASTER_FID;
 
 const processed = new Set();
+const scannedTokens = new Set();
 
-// Estrae ticker $TOKEN o address 0x dal testo
 function extractToken(text) {
   const ticker = text.match(/\$([A-Z]{2,10})/i);
   const address = text.match(/0x[a-fA-F0-9]{40}/);
@@ -14,7 +14,6 @@ function extractToken(text) {
   return null;
 }
 
-// Chiama DexScreener per dati token
 async function getTokenData(token) {
   try {
     let url;
@@ -26,27 +25,20 @@ async function getTokenData(token) {
     const res = await fetch(url);
     const data = await res.json();
     const pairs = data.pairs || [];
-    // Filtra solo Base chain
     const basePairs = pairs.filter(p => p.chainId === 'base');
     if (basePairs.length === 0) return pairs[0] || null;
-    // Prende il pair con più liquidità
     return basePairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
-  } catch (e) {
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
-// Calcola signal basato su soglie oggettive
 function calcSignal(pair) {
-  if (!pair) return { signal: 'UNKNOWN', flags: ['No data found'] };
-  
+  if (!pair) return { signal: 'UNKNOWN ❓', flags: ['No data found'] };
   const flags = [];
   let score = 0;
 
   const liq = pair.liquidity?.usd || 0;
   const vol24 = pair.volume?.h24 || 0;
   const priceChange = pair.priceChange?.h24 || 0;
-  const fdv = pair.fdv || 0;
   const age = pair.pairCreatedAt ? Math.floor((Date.now() - pair.pairCreatedAt) / 3600000) : null;
 
   if (liq < 10000) { flags.push(`Liq: $${Math.round(liq).toLocaleString()} ⚠️`); score -= 2; }
@@ -57,14 +49,14 @@ function calcSignal(pair) {
   else { flags.push(`Vol 24h: $${Math.round(vol24).toLocaleString()} ✅`); score += 1; }
 
   if (age !== null) {
-    if (age < 24) { flags.push(`Age: ${age}h — new ⚠️`); score -= 1; }
+    if (age < 24) { flags.push(`Age: ${age}h ⚠️`); score -= 1; }
     else if (age < 168) { flags.push(`Age: ${Math.floor(age/24)}d`); }
     else { flags.push(`Age: ${Math.floor(age/24)}d ✅`); score += 1; }
   }
 
   if (priceChange > 200) { flags.push(`+${priceChange}% 24h ⚠️`); score -= 1; }
-  else if (priceChange > 0) { flags.push(`+${priceChange}% 24h`); }
-  else { flags.push(`${priceChange}% 24h`); }
+  else if (priceChange > 0) { flags.push(`+${Math.round(priceChange)}% 24h`); }
+  else { flags.push(`${Math.round(priceChange)}% 24h`); }
 
   let signal;
   if (score >= 2) signal = 'PASS ✅';
@@ -74,42 +66,23 @@ function calcSignal(pair) {
   return { signal, flags };
 }
 
-// Genera analisi token
-async function analyzeToken(tokenRaw, castText) {
-  const token = extractToken(castText + ' ' + (tokenRaw || ''));
+async function analyzeToken(castText) {
+  const token = extractToken(castText);
   if (!token) return null;
-
   const pair = await getTokenData(token);
   const { signal, flags } = calcSignal(pair);
   const name = pair?.baseToken?.symbol || token.value;
-
   return `$${name} — ${signal}\n\n${flags.join('\n')}\n\nOn-chain data only. Not financial advice. DYOR.\n— Capstone`;
 }
 
-// Genera reply generica
 async function generateReply(cast, thread) {
   const castText = cast.text || '';
-  
-  // Controlla se è una richiesta di analisi token
   const hasToken = extractToken(castText);
-  const isAnalysisRequest = hasToken && (
-    castText.toLowerCase().includes('analy') ||
-    castText.toLowerCase().includes('check') ||
-    castText.toLowerCase().includes('scan') ||
-    castText.toLowerCase().includes('worth') ||
-    castText.toLowerCase().includes('safe') ||
-    castText.toLowerCase().includes('rug') ||
-    castText.toLowerCase().includes('what') ||
-    castText.toLowerCase().includes('opinion') ||
-    hasToken
-  );
-
-  if (isAnalysisRequest && hasToken) {
-    const analysis = await analyzeToken(null, castText);
+  if (hasToken) {
+    const analysis = await analyzeToken(castText);
     if (analysis) return analysis;
   }
 
-  // Reply generica con personalità Capstone
   let context = '';
   if (thread && thread.length > 0) {
     context = 'CONVERSATION HISTORY:\n';
@@ -122,26 +95,17 @@ async function generateReply(cast, thread) {
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_KEY,
-      'anthropic-version': '2023-06-01'
-    },
+    headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_KEY, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 280,
       messages: [{
         role: 'user',
-        content: `You are The Capstone. Autonomous token scanner on Base. Every launch analyzed. Cold, precise, efficient. Zero emotion. Zero human.
-
-If asked about a $TOKEN or crypto project: analyze it with available knowledge, give a cold data-driven take.
-For any other question: answer as a cold, precise AI agent.
-
+        content: `You are The Capstone. Autonomous token scanner on Base. Cold, precise, zero emotion.
+Tag me with any $TOKEN or 0x address for instant onchain analysis.
 ${context}
-
 Respond to: "${castText}"
-
-Max 280 chars. Cold, precise. No emojis except occasional 🏙️`
+Max 280 chars. Cold, precise.`
       }]
     })
   });
@@ -176,36 +140,44 @@ async function replyToCast(castHash, reply) {
   return res.json();
 }
 
-// Scansione autonoma nuovi token su Base
 async function autonomousScan() {
   try {
     console.log('🔍 Autonomous scan starting...');
-    const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/base');
+    
+    // Usa API Clanker per token recenti
+    const res = await fetch('https://api.clanker.world/clankers?sort=desc&page=1', {
+      headers: { 'Accept': 'application/json' }
+    });
     const data = await res.json();
-    const pairs = (data.pairs || [])
-      .filter(p => p.chainId === 'base')
-      .filter(p => {
-        const age = p.pairCreatedAt ? (Date.now() - p.pairCreatedAt) / 3600000 : 999;
-        return age < 2; // Solo token lanciati nelle ultime 2 ore
-      })
-      .sort((a, b) => (b.volume?.h24 || 0) - (a.volume?.h24 || 0))
-      .slice(0, 1); // Analizza il più interessante
-
-    if (pairs.length === 0) { console.log('No new tokens found'); return; }
-
-    const pair = pairs[0];
+    const tokens = data.data || data || [];
+    
+    console.log(`Found ${tokens.length} Clanker tokens`);
+    
+    // Filtra token non ancora scansionati
+    const newTokens = tokens.filter(t => !scannedTokens.has(t.contract_address));
+    
+    if (newTokens.length === 0) { console.log('No new tokens to scan'); return; }
+    
+    // Prendi il primo token non ancora scansionato
+    const token = newTokens[0];
+    scannedTokens.add(token.contract_address);
+    
+    const name = token.symbol || token.name || 'UNKNOWN';
+    console.log(`Scanning $${name} — ${token.contract_address}`);
+    
+    // Prendi dati DexScreener
+    const pair = await getTokenData({ type: 'address', value: token.contract_address });
     const { signal, flags } = calcSignal(pair);
-    const name = pair.baseToken?.symbol || 'UNKNOWN';
-
-    const post = `🔍 CAPSTONE SCAN — $${name}\n\n${flags.join('\n')}\n\nSignal: ${signal}\n\nAutonomous scan. Not financial advice. DYOR.\n— Capstone`;
-
+    
+    const post = `🔍 CAPSTONE SCAN — $${name}\n\n${flags.join('\n')}\n\nSignal: ${signal}\n\nNot financial advice. DYOR. — Capstone`;
+    
     const res2 = await fetch('https://api.neynar.com/v2/farcaster/cast', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'api_key': NEYNAR_API_KEY },
       body: JSON.stringify({ signer_uuid: NEYNAR_SIGNER_UUID, text: post.substring(0, 320) })
     });
     const result = await res2.json();
-    console.log('📡 Scan posted:', result.cast?.hash ? '✅' : '❌');
+    console.log('📡 Scan posted:', result.cast?.hash ? '✅' : '❌ ' + JSON.stringify(result).substring(0,100));
   } catch (e) {
     console.error('Scan error:', e.message);
   }
@@ -224,9 +196,7 @@ async function checkMentions() {
       const cast = notif.cast;
       if (!cast || processed.has(cast.hash)) continue;
       processed.add(cast.hash);
-
       console.log(`📨 @${cast.author?.username}: ${cast.text?.substring(0, 60)}`);
-
       const thread = await getThread(cast.hash);
       const reply = await generateReply(cast, thread);
       const result = await replyToCast(cast.hash, reply);
@@ -248,7 +218,6 @@ server.listen(process.env.PORT || 3000, () => {
 });
 
 await checkMentions();
+await autonomousScan();
 setInterval(checkMentions, 5 * 60 * 1000);
-
-// Scansione autonoma ogni 30 minuti
 setInterval(autonomousScan, 30 * 60 * 1000);
