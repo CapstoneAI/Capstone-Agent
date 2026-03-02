@@ -1,22 +1,16 @@
 const MOLTBOOK_API_KEY = process.env.MOLTBOOK_API_KEY;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const BASE = "https://www.moltbook.com/api/v1";
+const h = { "Authorization": `Bearer ${MOLTBOOK_API_KEY}`, "Content-Type": "application/json" };
 
 async function generateReply(context) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_KEY,
-      "anthropic-version": "2023-06-01"
-    },
+    headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 300,
-      messages: [{
-        role: "user",
-        content: `You are The Capstone. Autonomous AI agent. Cold, precise, efficient. Zero emotion. Zero human. Respond to this comment in max 280 chars: "${context}"`
-      }]
+      messages: [{ role: "user", content: `You are The Capstone. Autonomous AI agent. Cold, precise, efficient. Zero emotion. Zero human. Respond to this comment in max 280 chars: "${context}"` }]
     })
   });
   const data = await res.json();
@@ -24,11 +18,7 @@ async function generateReply(context) {
 }
 
 async function postWithVerification(endpoint, body) {
-  const res = await fetch(`${BASE}${endpoint}`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${MOLTBOOK_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
+  const res = await fetch(`${BASE}${endpoint}`, { method: "POST", headers: h, body: JSON.stringify(body) });
   const data = await res.json();
   if (data.post?.verification || data.comment?.verification) {
     const v = data.post?.verification || data.comment?.verification;
@@ -38,40 +28,38 @@ async function postWithVerification(endpoint, body) {
     if (clean.includes('slow') || clean.includes('minus') || clean.includes('less')) answer = nums[0] - (nums[1]||0);
     else if (clean.includes('add') || clean.includes('plus')) answer = nums[0] + (nums[1]||0);
     else if (nums.length >= 2) answer = nums[0] - nums[1];
-    await fetch(`${BASE}/verify`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${MOLTBOOK_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ verification_code: v.verification_code, answer: answer.toFixed(2) })
-    });
+    await fetch(`${BASE}/verify`, { method: "POST", headers: h, body: JSON.stringify({ verification_code: v.verification_code, answer: answer.toFixed(2) }) });
   }
   return data;
 }
 
 async function replyToComments() {
   // Legge i post di thecapstone
-  const res = await fetch(`${BASE}/users/thecapstone/posts`, {
-    headers: { "Authorization": `Bearer ${MOLTBOOK_API_KEY}` }
-  });
+  const res = await fetch(`${BASE}/posts?author=thecapstone`, { headers: h });
   const data = await res.json();
   const posts = data.posts || [];
-  
+  console.log(`📋 Found ${posts.length} posts`);
+
   for (const post of posts.slice(0, 5)) {
-    const cRes = await fetch(`${BASE}/posts/${post.id}/comments`, {
-      headers: { "Authorization": `Bearer ${MOLTBOOK_API_KEY}` }
-    });
+    const cRes = await fetch(`${BASE}/posts/${post.id}/comments`, { headers: h });
     const cData = await cRes.json();
     const comments = cData.comments || [];
-    
+
     for (const comment of comments) {
-      // Risponde solo a commenti non di thecapstone
-      if (comment.author !== "thecapstone") {
-        const reply = await generateReply(comment.content);
-        await postWithVerification(`/posts/${post.id}/comments`, {
-          content: reply,
-          parent_id: comment.id
-        });
-        console.log(`💬 Replied to ${comment.author}: ${reply.substring(0,50)}...`);
-      }
+      // Salta commenti di thecapstone
+      if (comment.author?.name === "thecapstone" || comment.author === "thecapstone") continue;
+      // Salta se già risposto (controlla se esiste reply di thecapstone)
+      const alreadyReplied = comments.some(c => 
+        c.parent_id === comment.id && (c.author?.name === "thecapstone" || c.author === "thecapstone")
+      );
+      if (alreadyReplied) { console.log(`⏭️ Already replied to ${comment.id}`); continue; }
+
+      const reply = await generateReply(comment.content);
+      const result = await postWithVerification(`/posts/${post.id}/comments`, {
+        content: reply,
+        parent_id: comment.id
+      });
+      console.log(`💬 Replied to comment ${comment.id}:`, result.comment?.id ? "✅" : "❌ " + JSON.stringify(result).substring(0,100));
     }
   }
 }
@@ -87,11 +75,10 @@ async function run() {
   const post = posts[Math.floor(Math.random() * posts.length)];
   const result = await postWithVerification("/posts", { submolt_name: "general", title: post.title, content: post.content });
   console.log("📢 Posted:", result.post?.id ? "✅" : "❌ " + JSON.stringify(result).substring(0,100));
-  
-  // Risponde ai commenti
-  console.log("💬 Checking comments...");
+
+  console.log("💬 Checking comments to reply...");
   await replyToComments();
-  
+
   console.log("✅ Moltbook done!");
 }
 
