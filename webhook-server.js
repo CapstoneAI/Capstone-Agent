@@ -172,5 +172,6 @@ server.listen(process.env.PORT || 3000, () => {
   console.log('🚀 Capstone live — token scanner active');
 });
 
-await checkMentions();
-setInterval(checkMentions, 5 * 60 * 1000);
+checkMentions().catch(e => console.error('Initial check failed:', e.message));
+setInterval(() => checkMentions().catch(e => console.error('Check failed:', e.message)), 5 * 60 * 1000);
+process.on('unhandledRejection', (err) => console.error('Unhandled:', err.message));
