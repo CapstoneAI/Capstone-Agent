@@ -17,28 +17,30 @@ async function run() {
   console.log('🔍 Autonomous scan starting...');
   const scanned = loadScanned();
 
-  const res = await fetch('https://api.dexscreener.com/token-profiles/latest/v1');
+  // Cerca token recenti su Base con buon volume
+  const res = await fetch('https://api.dexscreener.com/latest/dex/search?q=base');
   const data = await res.json();
-  const baseTokens = data.filter(t => t.chainId === 'base');
-  console.log(`Found ${baseTokens.length} Base tokens`);
+  const pairs = (data.pairs || [])
+    .filter(p => p.chainId === 'base')
+    .filter(p => p.baseToken?.address && !scanned.includes(p.baseToken.address))
+    .sort((a,b) => (b.volume?.h24||0) - (a.volume?.h24||0));
 
-  const token = baseTokens.find(t => !scanned.includes(t.tokenAddress));
-  if (!token) { console.log('No new tokens'); return; }
+  console.log(`Found ${pairs.length} Base pairs`);
 
-  const r2 = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token.tokenAddress}`);
-  const d2 = await r2.json();
-  const pair = (d2.pairs || []).sort((a,b) => (b.liquidity?.usd||0)-(a.liquidity?.usd||0))[0];
+  if (pairs.length === 0) { console.log('No new tokens'); return; }
 
-  const liq = pair?.liquidity?.usd || 0;
-  const vol = pair?.volume?.h24 || 0;
-  const price = pair?.priceUsd ? `$${parseFloat(pair.priceUsd).toFixed(8)}` : 'N/A';
-  const change = Math.round(pair?.priceChange?.h24 || 0);
-  const mcap = pair?.fdv ? `$${Math.round(pair.fdv/1000)}K` : 'N/A';
-  const txns = (pair?.txns?.h24?.buys||0) + (pair?.txns?.h24?.sells||0);
-  const buys = pair?.txns?.h24?.buys||0;
-  const sells = pair?.txns?.h24?.sells||0;
-  const name = pair?.baseToken?.symbol || token.tokenAddress.substring(0,8);
-  const address = token.tokenAddress;
+  const pair = pairs[0];
+  const address = pair.baseToken.address;
+  const name = pair.baseToken.symbol;
+  const liq = pair.liquidity?.usd || 0;
+  const vol = pair.volume?.h24 || 0;
+  const price = pair.priceUsd ? `$${parseFloat(pair.priceUsd).toFixed(8)}` : 'N/A';
+  const change = Math.round(pair.priceChange?.h24 || 0);
+  const mcap = pair.fdv ? `$${Math.round(pair.fdv/1000)}K` : 'N/A';
+  const txns = (pair.txns?.h24?.buys||0) + (pair.txns?.h24?.sells||0);
+  const buys = pair.txns?.h24?.buys||0;
+  const sells = pair.txns?.h24?.sells||0;
+  const age = pair.pairCreatedAt ? Math.floor((Date.now()-pair.pairCreatedAt)/3600000) : null;
 
   let score = 0;
   const flags = [];
@@ -52,7 +54,10 @@ async function run() {
   if (mcap !== 'N/A') flags.push(`MCap: ${mcap}`);
   if (txns > 0) flags.push(`Txns 24h: ${txns}`);
   if (buys > 0 && sells > 0) { flags.push(`Buys/Sells: ${buys}/${sells} ${buys>sells?'✅':'⚠️'}`); if(buys>sells) score+=1; }
-  flags.push(`Age: <1h ⚠️`); score -= 1;
+  if (age !== null) {
+    if (age < 24) { flags.push(`Age: ${age}h ⚠️`); score -= 1; }
+    else { flags.push(`Age: ${Math.floor(age/24)}d ✅`); score += 1; }
+  }
   if (change > 200) { flags.push(`+${change}% 24h ⚠️`); score -= 1; }
   else if (change > 0) flags.push(`+${change}% 24h`);
   else flags.push(`${change}% 24h`);
@@ -60,8 +65,7 @@ async function run() {
   const signal = score >= 2 ? 'PASS ✅' : score >= 0 ? 'CAUTION ⚠️' : 'AVOID ❌';
   const post = `🔍 CAPSTONE SCAN — $${name}\n\n${flags.join('\n')}\n\nSignal: ${signal}\n\n🔗 dexscreener.com/base/${address}\n\n@clanker_world @bankrbot\nNot financial advice. DYOR. — Capstone`;
 
-  console.log('Post:\n', post);
-  console.log('Length:', post.length);
+  console.log('Post preview:\n', post);
 
   const res2 = await fetch('https://api.neynar.com/v2/farcaster/cast', {
     method: 'POST',
@@ -71,7 +75,7 @@ async function run() {
   const result = await res2.json();
   console.log('Posted:', result.cast?.hash ? '✅ ' + result.cast.hash : '❌ ' + JSON.stringify(result).substring(0,150));
 
-  scanned.push(token.tokenAddress);
+  scanned.push(address);
   saveScanned(scanned);
 }
 
