@@ -4,6 +4,7 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const NEYNAR_API_KEY = process.env.NEYNAR_API_KEY;
 const NEYNAR_SIGNER_UUID = process.env.NEYNAR_SIGNER_UUID;
 const FARCASTER_FID = process.env.FARCASTER_FID;
+const RUGMUNCH_API_KEY = process.env.RUGMUNCH_API_KEY;
 const PORT = process.env.PORT || 3000;
 
 const processed = new Set();
@@ -41,6 +42,22 @@ async function getTokenData(token) {
   } catch (e) { return null; }
 }
 
+async function checkHoneypot(address) {
+  try {
+    const res = await fetch('https://cryptorugmunch.app/api/agent/v1/check-risk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': RUGMUNCH_API_KEY },
+      body: JSON.stringify({ token_address: address, chain: 'base' }),
+      signal: AbortSignal.timeout(8000)
+    });
+    const data = await res.json();
+    const honeypot = data.is_honeypot ? 'YES ❌' : 'NO ✅';
+    const score = data.risk_score || 0;
+    const risk = score < 30 ? 'LOW ✅' : score < 65 ? 'MEDIUM ⚠️' : 'HIGH ❌';
+    return { honeypot, risk };
+  } catch (e) { return null; }
+}
+
 function calcSignal(pair) {
   if (!pair) return { signal: 'UNKNOWN ❓', flags: ['No data found'] };
   const flags = [];
@@ -51,19 +68,23 @@ function calcSignal(pair) {
   const age = pair.pairCreatedAt ? Math.floor((Date.now() - pair.pairCreatedAt) / 3600000) : null;
   const chain = pair.chainId || 'unknown';
   flags.push(`Chain: ${chain}`);
-  const price = pair.priceUsd ? `Price: $${parseFloat(pair.priceUsd).toFixed(6)}` : null;
-  if (price) flags.push(price);
-  const price = pair.priceUsd ? `Price: $${parseFloat(pair.priceUsd).toFixed(6)}` : null;
-  if (price) flags.push(price);
+  const price = pair.priceUsd ? `$${parseFloat(pair.priceUsd).toFixed(8)}` : 'N/A';
+  flags.push(`Price: ${price}`);
   if (liq < 10000) { flags.push(`Liq: $${Math.round(liq).toLocaleString()} ⚠️`); score -= 2; }
   else if (liq < 50000) { flags.push(`Liq: $${Math.round(liq).toLocaleString()} ⚠️`); score -= 1; }
   else { flags.push(`Liq: $${Math.round(liq).toLocaleString()} ✅`); score += 1; }
   if (vol24 < 5000) { flags.push(`Vol 24h: $${Math.round(vol24).toLocaleString()} ⚠️`); score -= 1; }
   else { flags.push(`Vol 24h: $${Math.round(vol24).toLocaleString()} ✅`); score += 1; }
+  const mcap = pair.fdv ? `$${Math.round(pair.fdv/1000)}K` : null;
+  if (mcap) flags.push(`MCap: ${mcap}`);
+  const buys = pair.txns?.h24?.buys || 0;
+  const sells = pair.txns?.h24?.sells || 0;
+  const txns = buys + sells;
+  if (txns > 0) flags.push(`Txns 24h: ${txns}`);
+  if (buys > 0 && sells > 0) { flags.push(`Buys/Sells: ${buys}/${sells} ${buys>sells?'✅':'⚠️'}`); if(buys>sells) score+=1; }
   if (age !== null) {
     if (age < 24) { flags.push(`Age: ${age}h ⚠️`); score -= 1; }
-    else if (age < 168) { flags.push(`Age: ${Math.floor(age/24)}d`); }
-    else { flags.push(`Age: ${Math.floor(age/24)}d ✅`); score += 1; }
+    else { flags.push(`Age: ${Math.floor(age/24)}d`); }
   }
   if (priceChange > 200) { flags.push(`+${Math.round(priceChange)}% 24h ⚠️`); score -= 1; }
   else if (priceChange > 0) { flags.push(`+${Math.round(priceChange)}% 24h`); }
@@ -80,7 +101,15 @@ async function analyzeToken(castText) {
     const pair = await getTokenData(token);
     const { signal, flags } = calcSignal(pair);
     const name = pair?.baseToken?.symbol || token.value;
-    return `$${name} — ${signal}\n\n${flags.join('\n')}\n\nOn-chain data only. Not financial advice. DYOR.\n— Capstone`;
+    const address = pair?.baseToken?.address || (token.type === 'address' ? token.value : null);
+
+    let honeypotLine = '';
+    if (address && pair?.chainId === 'base') {
+      const hp = await checkHoneypot(address);
+      if (hp) honeypotLine = `\nHoneypot: ${hp.honeypot} | Risk: ${hp.risk}`;
+    }
+
+    return `$${name} — ${signal}\n\n${flags.join('\n')}${honeypotLine}\n\nNot financial advice. DYOR.\n— Capstone`;
   } catch (e) { return null; }
 }
 
@@ -107,16 +136,13 @@ async function generateReply(cast, thread) {
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 280,
-        messages: [{ role: 'user', content: `You are The Capstone. Autonomous token scanner. Cold, precise.\n${context}\nRespond to: "${castText}"\nMax 280 chars.` }]
+        messages: [{ role: 'user', content: `You are The Capstone. Autonomous token scanner on Base. Cold, precise.\n${context}\nRespond to: "${castText}"\nMax 280 chars.` }]
       }),
       signal: AbortSignal.timeout(15000)
     });
     const data = await res.json();
     return data.content?.[0]?.text || 'Signal unclear. — Capstone';
-  } catch (e) {
-    console.error('Reply error:', e.message);
-    return 'Signal unclear. — Capstone';
-  }
+  } catch (e) { return 'Signal unclear. — Capstone'; }
 }
 
 async function getThread(castHash) {
@@ -175,25 +201,8 @@ async function checkMentions() {
   }
 }
 
-// Aspetta 5 secondi poi inizia il polling
 setTimeout(() => {
   console.log('📡 Polling started');
   checkMentions();
   setInterval(checkMentions, 5 * 60 * 1000);
 }, 5000);
-
-async function checkHoneypot(address, chain = 'base') {
-  try {
-    const res = await fetch('https://cryptorugmunch.app/api/agent/v1/check-risk', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-API-Key': process.env.RUGMUNCH_API_KEY },
-      body: JSON.stringify({ token_address: address, chain }),
-      signal: AbortSignal.timeout(8000)
-    });
-    const data = await res.json();
-    const score = data.risk_score || 0;
-    const honeypot = data.is_honeypot ? '❌ YES' : '✅ NO';
-    const risk = score < 30 ? '✅ LOW' : score < 65 ? '⚠️ MEDIUM' : '❌ HIGH';
-    return { honeypot, risk, score };
-  } catch (e) { return null; }
-}
