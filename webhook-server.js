@@ -181,3 +181,19 @@ setTimeout(() => {
   checkMentions();
   setInterval(checkMentions, 5 * 60 * 1000);
 }, 5000);
+
+async function checkHoneypot(address, chain = 'base') {
+  try {
+    const res = await fetch('https://cryptorugmunch.app/api/agent/v1/check-risk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': process.env.RUGMUNCH_API_KEY },
+      body: JSON.stringify({ token_address: address, chain }),
+      signal: AbortSignal.timeout(8000)
+    });
+    const data = await res.json();
+    const score = data.risk_score || 0;
+    const honeypot = data.is_honeypot ? '❌ YES' : '✅ NO';
+    const risk = score < 30 ? '✅ LOW' : score < 65 ? '⚠️ MEDIUM' : '❌ HIGH';
+    return { honeypot, risk, score };
+  } catch (e) { return null; }
+}
