@@ -62,33 +62,68 @@ function calcSignal(pair) {
   if (!pair) return { signal: 'UNKNOWN ❓', flags: ['No data found'] };
   const flags = [];
   let score = 0;
+  let forceAvoid = false;
+  let forceCaution = false;
+
   const liq = pair.liquidity?.usd || 0;
   const vol24 = pair.volume?.h24 || 0;
   const priceChange = pair.priceChange?.h24 || 0;
-  const age = pair.pairCreatedAt ? Math.floor((Date.now() - pair.pairCreatedAt) / 3600000) : null;
+  const ageMs = pair.pairCreatedAt ? Date.now() - pair.pairCreatedAt : null;
+  const ageHours = ageMs ? Math.floor(ageMs / 3600000) : null;
+  const ageDays = ageHours ? Math.floor(ageHours / 24) : null;
   const chain = pair.chainId || 'unknown';
+
   flags.push(`Chain: ${chain}`);
-  const price = pair.priceUsd ? `$${parseFloat(pair.priceUsd).toFixed(8)}` : 'N/A';
+  const price = pair.priceUsd ? `${parseFloat(pair.priceUsd).toFixed(8)}` : 'N/A';
   flags.push(`Price: ${price}`);
-  if (liq < 10000) { flags.push(`Liq: $${Math.round(liq).toLocaleString()} ⚠️`); score -= 2; }
-  else if (liq < 50000) { flags.push(`Liq: $${Math.round(liq).toLocaleString()} ⚠️`); score -= 1; }
-  else { flags.push(`Liq: $${Math.round(liq).toLocaleString()} ✅`); score += 1; }
-  if (vol24 < 5000) { flags.push(`Vol 24h: $${Math.round(vol24).toLocaleString()} ⚠️`); score -= 1; }
-  else { flags.push(`Vol 24h: $${Math.round(vol24).toLocaleString()} ✅`); score += 1; }
-  const mcap = pair.fdv ? `$${Math.round(pair.fdv/1000)}K` : null;
+
+  // Liquidity
+  if (liq < 10000) { flags.push(`Liq: ${Math.round(liq).toLocaleString()} ⚠️`); score -= 2; forceAvoid = true; }
+  else if (liq < 50000) { flags.push(`Liq: ${Math.round(liq).toLocaleString()} ⚠️`); score -= 1; forceCaution = true; }
+  else { flags.push(`Liq: ${Math.round(liq).toLocaleString()} ✅`); score += 1; }
+
+  // Volume
+  if (vol24 < 5000) { flags.push(`Vol 24h: ${Math.round(vol24).toLocaleString()} ⚠️`); score -= 1; }
+  else { flags.push(`Vol 24h: ${Math.round(vol24).toLocaleString()} ✅`); score += 1; }
+
+  // MCap
+  const mcap = pair.fdv ? `${Math.round(pair.fdv/1000)}K` : null;
   if (mcap) flags.push(`MCap: ${mcap}`);
+
+  // Txns
   const buys = pair.txns?.h24?.buys || 0;
   const sells = pair.txns?.h24?.sells || 0;
   const txns = buys + sells;
   if (txns > 0) flags.push(`Txns 24h: ${txns}`);
-  if (buys > 0 && sells > 0) { flags.push(`Buys/Sells: ${buys}/${sells} ${buys>sells?'✅':'⚠️'}`); if(buys>sells) score+=1; }
-  if (age !== null) {
-    if (age < 24) { flags.push(`Age: ${age}h ⚠️`); score -= 1; }
-    else { flags.push(`Age: ${Math.floor(age/24)}d`); }
+  if (buys > 0 && sells > 0) {
+    flags.push(`Buys/Sells: ${buys}/${sells} ${buys>sells?'✅':'⚠️'}`);
+    if (buys > sells) score += 1;
   }
+
+  // Age — regola principale
+  if (ageHours === null) {
+    flags.push('Age: unknown ⚠️');
+    forceCaution = true;
+  } else if (ageHours < 1) {
+    flags.push(`Age: ${ageHours}h ❌ VERY NEW`);
+    forceAvoid = true;
+  } else if (ageHours < 24) {
+    flags.push(`Age: ${ageHours}h ⚠️`);
+    forceCaution = true;
+    score -= 2;
+  } else {
+    flags.push(`Age: ${ageDays}d`);
+    if (ageDays > 7) score += 1;
+  }
+
+  // Price change
   if (priceChange > 200) { flags.push(`+${Math.round(priceChange)}% 24h ⚠️`); score -= 1; }
   else if (priceChange > 0) { flags.push(`+${Math.round(priceChange)}% 24h`); }
   else { flags.push(`${Math.round(priceChange)}% 24h`); }
+
+  // Decisione finale
+  if (forceAvoid) return { signal: 'AVOID ❌', flags };
+  if (forceCaution) return { signal: 'CAUTION ⚠️', flags };
   if (score >= 2) return { signal: 'PASS ✅', flags };
   if (score >= 0) return { signal: 'CAUTION ⚠️', flags };
   return { signal: 'AVOID ❌', flags };
