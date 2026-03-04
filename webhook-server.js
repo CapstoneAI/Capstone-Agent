@@ -1,4 +1,5 @@
 import http from 'http';
+import { scoreProject, generatePost } from './capstone-logic.js';
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const NEYNAR_API_KEY = process.env.NEYNAR_API_KEY;
@@ -134,17 +135,39 @@ async function analyzeToken(castText) {
     const token = extractToken(castText);
     if (!token) return null;
     const pair = await getTokenData(token);
-    const { signal, flags } = calcSignal(pair);
     const name = pair?.baseToken?.symbol || token.value;
     const address = pair?.baseToken?.address || (token.type === 'address' ? token.value : null);
 
-    let honeypotLine = '';
+    // Honeypot check
+    let honeypot = null;
     if (address && pair?.chainId === 'base') {
       const hp = await checkHoneypot(address);
-      if (hp) honeypotLine = `\nHoneypot: ${hp.honeypot} | Risk: ${hp.risk}`;
+      if (hp) honeypot = { isHoneypot: hp.honeypot.includes('YES'), riskScore: hp.score || 0 };
     }
 
-    return `$${name} — ${signal}\n\n${flags.join('\n')}${honeypotLine}\n\nNot financial advice. DYOR.\n— Capstone`;
+    // Score con capstone-logic
+    const analysis = scoreProject({
+      pair,
+      honeypot,
+      devWallet: { clean: true, dumpPct: 0 }, // TODO: wallet analysis
+      holderData: { top10Pct: 50 },            // TODO: holder data
+      githubActivity: { hasGithub: false, commitsLast30d: 0 },
+      founderFarcaster: { active: false, daysSinceLastCast: 99 }
+    });
+
+    // Hard skip
+    if (analysis.hardSkip) {
+      return `${name} — SKIP ❌\n\n${analysis.reason}\n\n⚠️ Not financial advice. DYOR.\n— Capstone 🏙️`;
+    }
+
+    // Post generato dalla logica
+    const post = generatePost(name, analysis);
+
+    // Aggiungi dati base mercato
+    const { signal, flags } = calcSignal(pair);
+    const marketData = flags.slice(0,6).join('\n');
+
+    return `${name} — ${signal}\n\n${marketData}\n\nCapstone Score: ${analysis.score}/10 → ${analysis.verdict}\n${analysis.reason}\n\n⚠️ Not financial advice. DYOR.\n— Capstone 🏙️`;
   } catch (e) { return null; }
 }
 
