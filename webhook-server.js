@@ -1,5 +1,6 @@
 import http from 'http';
 import { scoreProject, generatePost } from './capstone-logic.js';
+import { analyzeDevWallet, analyzeHolders, analyzeGithub } from './capstone-onchain.js';
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const NEYNAR_API_KEY = process.env.NEYNAR_API_KEY;
@@ -145,12 +146,17 @@ async function analyzeToken(castText) {
       if (hp) honeypot = { isHoneypot: hp.honeypot.includes('YES'), riskScore: hp.score || 0 };
     }
 
-    // Score con capstone-logic
+    // Score con capstone-logic + dati reali onchain
+    const [devWallet, holderData] = await Promise.all([
+      analyzeDevWallet(address || ''),
+      analyzeHolders(address || '')
+    ]);
+
     const analysis = scoreProject({
       pair,
       honeypot,
-      devWallet: { clean: true, dumpPct: 0 }, // TODO: wallet analysis
-      holderData: { top10Pct: 50 },            // TODO: holder data
+      devWallet,
+      holderData,
       githubActivity: { hasGithub: false, commitsLast30d: 0 },
       founderFarcaster: { active: false, daysSinceLastCast: 99 }
     });
